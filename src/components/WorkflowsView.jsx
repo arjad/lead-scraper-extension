@@ -3,6 +3,8 @@ import { useWorkflows } from '../hooks/useWorkflows.js';
 import { useSettings } from '../hooks/useSettings.js';
 import { exportToCSV } from '../helpers.js';
 
+const API_BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://127.0.0.1:8000';
+
 export default function WorkflowsView() {
   const { workflows, deleteWorkflow, updateWorkflow } = useWorkflows()
   const { settings } = useSettings()
@@ -48,6 +50,40 @@ export default function WorkflowsView() {
     setSortConfig({ key, direction });
   };
 
+  const handleLeadCheck = (originalIndex, checked) => {
+    if (!activeWorkflow) return;
+    const newLeads = [...activeWorkflow.leads];
+    newLeads[originalIndex] = { ...newLeads[originalIndex], checked };
+    updateWorkflow(activeWorkflow.id, { leads: newLeads });
+  };
+
+  const getFbMessageLink = (url) => {
+    if (!url) return null;
+    try {
+      const urlObj = new URL(url.startsWith('http') ? url : `https://${url}`);
+      if (urlObj.searchParams.has('id')) return `https://m.me/${urlObj.searchParams.get('id')}`;
+      const pathParts = urlObj.pathname.split('/').filter(Boolean);
+      const username = pathParts[pathParts.length - 1];
+      return username ? `https://m.me/${username}` : url;
+    } catch(e) { return url; }
+  };
+
+  const getIgMessageLink = (url) => {
+    if (!url) return null;
+    try {
+      const urlObj = new URL(url.startsWith('http') ? url : `https://${url}`);
+      const pathParts = urlObj.pathname.split('/').filter(Boolean);
+      const username = pathParts[0];
+      return username ? `https://ig.me/m/${username}` : url;
+    } catch(e) { return url; }
+  };
+
+  const getWhatsAppLink = (phone) => {
+    if (!phone) return null;
+    const digitsOnly = phone.replace(/\D/g, '');
+    return `https://wa.me/${digitsOnly}`;
+  };
+
   const handleNoteChange = (originalIndex, newNote) => {
     if (!activeWorkflow) return;
     const newLeads = [...activeWorkflow.leads];
@@ -87,7 +123,7 @@ export default function WorkflowsView() {
     updateWorkflow(activeWorkflow.id, { status: 'enriching' })
     
     try {
-      const response = await fetch("http://127.0.0.1:8000/process-leads", {
+      const response = await fetch(`${API_BASE_URL}/process-leads`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -101,36 +137,53 @@ export default function WorkflowsView() {
       
       const { job_id } = await response.json();
       
-      const pollInterval = setInterval(async () => {
-        try {
-          const statusRes = await fetch(`http://127.0.0.1:8000/job-status/${job_id}`);
-          if (statusRes.ok) {
-            const statusData = await statusRes.json();
-            
-            if (statusData.results && statusData.results.length > 0) {
-              updateWorkflow(activeWorkflow.id, { leads: statusData.results });
-            }
-
-            if (statusData.status === 'completed') {
-              clearInterval(pollInterval);
-              updateWorkflow(activeWorkflow.id, { leads: statusData.results || activeWorkflow.leads, enriched: true, status: 'completed' });
-              setEnriching(false);
-            } else if (statusData.status === 'failed') {
-              clearInterval(pollInterval);
-              setError("Scraping job failed: " + statusData.error);
-              updateWorkflow(activeWorkflow.id, { status: 'completed' });
-              setEnriching(false);
-            }
-          }
-        } catch (pollErr) {
-          console.error("Polling error:", pollErr);
-        }
-      }, 3000);
+      // Stop automatic polling. Just save the job_id.
+      updateWorkflow(activeWorkflow.id, { status: 'enriching', job_id: job_id });
+      setEnriching(false);
 
     } catch (err) {
       setError("Scraping request failed: " + err.message)
       updateWorkflow(activeWorkflow.id, { status: 'completed' })
       setEnriching(false)
+    }
+  }
+
+  const handleRefreshStatus = async () => {
+    if (!activeWorkflow || !activeWorkflow.job_id) return;
+    
+    setEnriching(true);
+    setError(null);
+    try {
+      const statusRes = await fetch(`${API_BASE_URL}/job-status/${activeWorkflow.job_id}`);
+      if (!statusRes.ok) throw new Error("Failed to fetch status");
+      
+      const statusData = await statusRes.json();
+      
+      if (statusData.results && statusData.results.length > 0) {
+        updateWorkflow(activeWorkflow.id, { 
+          leads: statusData.results,
+          completed_leads: statusData.completed_leads,
+          total_leads: statusData.total_leads
+        });
+      }
+
+      if (statusData.status === 'completed') {
+        updateWorkflow(activeWorkflow.id, { 
+          leads: statusData.results || activeWorkflow.leads, 
+          enriched: true, 
+          status: 'completed',
+          completed_leads: statusData.completed_leads,
+          total_leads: statusData.total_leads
+        });
+      } else if (statusData.status === 'failed') {
+        setError("Scraping job failed: " + statusData.error);
+        updateWorkflow(activeWorkflow.id, { status: 'completed' });
+      }
+    } catch (err) {
+      console.error(err);
+      setError("Failed to fetch results: " + err.message);
+    } finally {
+      setEnriching(false);
     }
   }
 
@@ -153,13 +206,24 @@ export default function WorkflowsView() {
           <div className="flex items-center justify-between mt-4">
             <div className="flex items-center space-x-2">
               <span className="text-sm font-medium text-textMuted bg-surface px-3 py-1.5 rounded-lg border border-secondary/10">
-                {activeWorkflow.status === 'scraping' ? 'Scraping in progress...' : `${activeWorkflow.leads.length} leads found`}
+                {activeWorkflow.status === 'scraping' ? 'Scraping in progress...' : (activeWorkflow.status === 'enriching' ? `Scraping websites: ${activeWorkflow.completed_leads || 0} / ${activeWorkflow.total_leads || activeWorkflow.leads.length} done` : `${activeWorkflow.leads.length} leads found`)}
               </span>
               {activeWorkflow.status === 'scraping' && (
                 <svg className="animate-spin h-5 w-5 text-primary" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
               )}
             </div>
             <div className="flex items-center space-x-3">
+              {activeWorkflow.status === 'enriching' && (
+                <button
+                  onClick={handleRefreshStatus}
+                  disabled={enriching}
+                  className="px-4 py-2 bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 rounded-lg font-medium transition-colors border border-blue-600/30 disabled:opacity-50 flex items-center text-sm"
+                >
+                  {enriching ? (
+                    <><svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-blue-400" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>Refreshing...</>
+                  ) : "Refresh Results"}
+                </button>
+              )}
               <button 
                 onClick={startIndividualScraping}
                 disabled={enriching || activeWorkflow.enriched || activeWorkflow.status === 'scraping'}
@@ -206,17 +270,18 @@ export default function WorkflowsView() {
           <table className="w-full text-left border-collapse text-sm whitespace-nowrap">
             <thead className="sticky top-0 bg-background z-10">
               <tr className="border-b border-surface text-textMuted bg-surface/50">
-                <th className="p-3 font-semibold w-10 text-center">#</th>
+                <th className="p-3 font-semibold w-[10px] min-w-[10px] text-center">✔</th>
+                <th className="p-3 font-semibold w-[10px] min-w-[10px] text-center">#</th>
                 <SortHeader label="Company Name" sortKey="name" />
                 <SortHeader label="Website" sortKey="website" />
+                <SortHeader label="Phone" sortKey="phone" />
                 {(activeWorkflow.enriched || activeWorkflow.status === 'enriching') && (
                   <>
-                    <SortHeader label="Phone" sortKey="phone" />
                     <SortHeader label="Email" sortKey="email" />
                     <SortHeader label="Facebook" sortKey="facebook" />
                     <SortHeader label="Instagram" sortKey="instagram" />
                     <SortHeader label="Twitter" sortKey="twitter" />
-                    <SortHeader label="Status/Error" sortKey="status" />
+                    <SortHeader label="Status" sortKey="status" />
                   </>
                 )}
                 <th className="p-3 font-semibold min-w-[150px]">Notes</th>
@@ -225,20 +290,24 @@ export default function WorkflowsView() {
             <tbody>
               {sortedLeads.map((lead, i) => (
                 <tr key={lead.originalIndex} className="border-b border-surface hover:bg-surface/30 transition-colors">
-                  <td className="p-3 text-center text-textMuted max-w-[50px] truncate">{i + 1}</td>
-                  <td className="p-3 max-w-[50px] truncate" title={lead.name}>{lead.name || 'Unnamed Business'}</td>
-                  <td className="p-3 max-w-[50px] truncate" title={lead.website}>
+                  <td className="p-3 text-center">
+                    <input type="checkbox" checked={lead.checked || false} onChange={(e) => handleLeadCheck(lead.originalIndex, e.target.checked)} className="cursor-pointer" />
+                  </td>
+                  <td className="p-3 text-center text-textMuted w-[10px] min-w-[10px]">{i + 1}</td>
+                  <td className="p-3 max-w-[150px] truncate" title={lead.name}>{lead.name || 'Unnamed Business'}</td>
+                  <td className="p-3 min-w-[60px] max-w-[150px] truncate" title={lead.website}>
                     {lead.website ? <a href={lead.website} target="_blank" rel="noreferrer" className="text-primary hover:underline">{lead.website}</a> : '-'}
                   </td>
+                  <td className="p-3 min-w-[60px] max-w-[150px] truncate" title={lead.phone}>{lead.phone ? <a href={getWhatsAppLink(lead.phone)} target="_blank" rel="noreferrer" className="text-primary hover:underline" title="Message on WhatsApp">{lead.phone}</a> : '-'}</td>
                   {(activeWorkflow.enriched || activeWorkflow.status === 'enriching') && (
                     <>
-                      <td className="p-3 max-w-[50px] truncate" title={lead.phone}>{lead.phone || '-'}</td>
-                      <td className="p-3 max-w-[50px] truncate" title={lead.email}>{lead.email ? <span className="text-green-500">{lead.email}</span> : '-'}</td>
-                      <td className="p-3 max-w-[50px] truncate" title={lead.facebook}>{lead.facebook ? <a href={lead.facebook} target="_blank" rel="noreferrer" className="text-primary hover:underline">{lead.facebook}</a> : '-'}</td>
-                      <td className="p-3 max-w-[50px] truncate" title={lead.instagram}>{lead.instagram ? <a href={lead.instagram} target="_blank" rel="noreferrer" className="text-primary hover:underline">{lead.instagram}</a> : '-'}</td>
-                      <td className="p-3 max-w-[50px] truncate" title={lead.twitter}>{lead.twitter ? <a href={lead.twitter} target="_blank" rel="noreferrer" className="text-primary hover:underline">{lead.twitter}</a> : '-'}</td>
-                      <td className="p-3 max-w-[50px] truncate" title={lead.error}>
-                        {lead.error ? <span className="text-red-500">{lead.error}</span> : (lead.email ? <span className="text-green-500">Success</span> : <span className="text-textMuted">-</span>)}
+                      <td className="p-3 min-w-[60px] max-w-[150px] truncate" title={lead.email}>{lead.email ? <a href={`https://mail.google.com/mail/?view=cm&fs=1&to=${lead.email}`} target="_blank" rel="noreferrer" className="text-green-500 hover:underline">{lead.email}</a> : '-'}</td>
+                      <td className="p-3 min-w-[60px] max-w-[150px] truncate" title={lead.facebook}>{lead.facebook ? <a href={getFbMessageLink(lead.facebook)} target="_blank" rel="noreferrer" className="text-primary hover:underline" title="Send Message on Facebook">{lead.facebook}</a> : '-'}</td>
+                      <td className="p-3 min-w-[60px] max-w-[150px] truncate" title={lead.instagram}>{lead.instagram ? <a href={getIgMessageLink(lead.instagram)} target="_blank" rel="noreferrer" className="text-primary hover:underline" title="Send Message on Instagram">{lead.instagram}</a> : '-'}</td>
+                      <td className="p-3 min-w-[60px] max-w-[150px] truncate" title={lead.twitter}>{lead.twitter ? <a href={lead.twitter} target="_blank" rel="noreferrer" className="text-primary hover:underline">{lead.twitter}</a> : '-'}</td>
+                      <td className="p-3 max-w-[100px] truncate" title={lead.error}>
+                        {lead.error ? <span className="inline-block px-2 py-0.5 rounded text-xs font-medium bg-surface text-textMuted border border-secondary/20">Failed</span> : ((lead.email || lead.phone || lead.website) ? <span className="inline-block px-2 py-0.5 rounded text-xs font-medium bg-surface text-textMuted border border-secondary/20">Completed</span> : <span className="text-textMuted">-</span>)}
+                        {lead.error && <div className="text-red-400 text-xs mt-1 truncate" title={lead.error}>{lead.error}</div>}
                       </td>
                     </>
                   )}

@@ -27,5 +27,11 @@
     }
   ],
   "permissions": ["activeTab", "scripting", "storage"],
-  "host_permissions": ["*://www.google.com/maps/*", "http://127.0.0.1/*", "http://localhost/*"]
+  "host_permissions": ["*://www.google.com/maps/*", "http://127.0.0.1/*", "http://localhost/*"],
+  "web_accessible_resources": [
+    {
+      "resources": ["index.html"],
+      "matches": ["*://www.google.com/*"]
+    }
+  ]
 }

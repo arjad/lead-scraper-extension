@@ -9,7 +9,7 @@ export default function IntegrationsView() {
   const [status, setStatus] = useState(null);
   const [loading, setLoading] = useState(false);
 
-  const API_BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://127.0.0.1:8000';
+  const API_BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://16.170.214.3:8000';
 
   const handleConnectGmail = () => {
     // Open the Google OAuth login route in a new tab. 

@@ -2,16 +2,28 @@ export function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-export async function scrollToBottom(feed, retriesCount = 5, delayMs = 3000) {
+export async function scrollToBottom(feed, retriesCount = 12, delayMs = 5000, onProgress = null) {
   if (!feed) return;
-  let lastHeight = 0;
+  let lastRecordCount = 0;
   let retries = 0;
+  
   while (retries < retriesCount) {
     feed.scrollTo(0, feed.scrollHeight);
     await delay(delayMs);
-    if (feed.scrollHeight > lastHeight) {
-      lastHeight = feed.scrollHeight;
-      retries = 0;
+    
+    // Check if new records were loaded by counting the actual result cards
+    const currentRecordCount = document.querySelectorAll('.Nv2PK').length;
+    
+    // Check for "end of list" message to stop early
+    if (feed.innerText && feed.innerText.includes("You've reached the end of the list")) {
+      console.log("Found 'end of list' message, stopping early.");
+      break;
+    }
+    
+    if (currentRecordCount > lastRecordCount) {
+      lastRecordCount = currentRecordCount;
+      retries = 0; // Reset retries since we found new records
+      if (onProgress) onProgress(); // Notify about new records
     } else {
       retries++;
     }
