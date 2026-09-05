@@ -38,23 +38,13 @@ export default function SettingsApp() {
 
   if (!isLoaded || !authLoaded) return <div className="p-10 text-center text-textMuted">Loading settings...</div>
 
-  if (!token) {
-    return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <div className="w-[400px] h-[500px] bg-surface shadow-2xl rounded-2xl overflow-hidden border border-secondary/20">
-          <AuthView />
-        </div>
-      </div>
-    )
-  }
-
   return (
     <div className="flex min-h-screen bg-background text-textMain">
       <SettingsSidebar activeTab={activeTab} setActiveTab={setActiveTab} />
 
       <main className={`flex-1 overflow-y-auto ${activeTab === 'workflows' ? 'p-0' : 'p-10'}`}>
         <div className={activeTab === 'workflows' ? 'w-full h-full' : 'max-w-3xl mx-auto'}>
-          {activeTab === 'profile' && <ProfileView />}
+          {activeTab === 'profile' && (!token ? <AuthView /> : <ProfileView />)}
           {activeTab === 'workflows' && <WorkflowsView />}
           {activeTab === 'settings' && <SettingsView settings={settings} updateSettings={updateSettings} />}
           {activeTab === 'integrations' && <IntegrationsView />}

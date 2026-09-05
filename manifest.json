@@ -23,11 +23,11 @@
   "content_scripts": [
     {
       "js": ["src/content.js"],
-      "matches": ["*://www.google.com/maps/*"]
+      "matches": ["<all_urls>"]
     }
   ],
   "permissions": ["activeTab", "scripting", "storage"],
-  "host_permissions": ["*://www.google.com/maps/*", "http://127.0.0.1/*", "http://localhost/*"],
+  "host_permissions": ["<all_urls>", "http://127.0.0.1/*", "http://localhost/*"],
   "web_accessible_resources": [
     {
       "resources": ["index.html"],

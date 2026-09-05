@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useWorkflows } from '../hooks/useWorkflows.js';
 import { useSettings } from '../hooks/useSettings.js';
-import { exportToCSV } from '../helpers.js';
+import { exportToCSV } from '../exportHelpers.js';
 
 const API_BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://127.0.0.1:8000';
 
@@ -14,6 +14,12 @@ export default function WorkflowsView() {
   const [error, setError] = useState(null)
   const [exportDropdownOpen, setExportDropdownOpen] = useState(false)
   const [sortConfig, setSortConfig] = useState({ key: null, direction: 'asc' })
+  const [showDuplicates, setShowDuplicates] = useState(true)
+  const [expandedGroups, setExpandedGroups] = useState({})
+
+  const toggleGroup = (niche) => {
+    setExpandedGroups(prev => ({ ...prev, [niche]: !prev[niche] }))
+  }
 
   const activeWorkflow = workflows.find(w => w.id === activeWorkflowId)
   
@@ -187,6 +193,28 @@ export default function WorkflowsView() {
     }
   }
 
+  const getExpandedLeads = (leads) => {
+    if (!leads) return [];
+    const expanded = [];
+    leads.forEach((lead, originalSortIndex) => {
+      if (showDuplicates && lead.email && lead.email.includes(',')) {
+        const emails = lead.email.split(',').map(e => e.trim()).filter(Boolean);
+        emails.forEach((email, i) => {
+          expanded.push({
+            ...lead,
+            originalSortIndex: originalSortIndex,
+            email: email,
+            isDuplicateEmail: i > 0,
+            emailIndex: i
+          });
+        });
+      } else {
+        expanded.push({ ...lead, originalSortIndex: originalSortIndex });
+      }
+    });
+    return expanded;
+  };
+
   if (activeWorkflow) {
     return (
       <div className="flex flex-col h-screen">
@@ -266,12 +294,19 @@ export default function WorkflowsView() {
         </div>
         </div>
         
+        <div className="px-10 mb-3 flex items-center">
+          <label className="flex items-center space-x-2 text-sm text-textMuted cursor-pointer hover:text-textMain transition-colors">
+            <input type="checkbox" checked={showDuplicates} onChange={(e) => setShowDuplicates(e.target.checked)} className="rounded border-secondary/30 text-primary focus:ring-primary/50 cursor-pointer" />
+            <span>Show all duplicate emails</span>
+          </label>
+        </div>
+        
         <div className="flex-1 overflow-auto px-10 pb-10">
-          <table className="w-full text-left border-collapse text-sm whitespace-nowrap">
-            <thead className="sticky top-0 bg-background z-10">
-              <tr className="border-b border-surface text-textMuted bg-surface/50">
-                <th className="p-3 font-semibold w-[10px] min-w-[10px] text-center">✔</th>
-                <th className="p-3 font-semibold w-[10px] min-w-[10px] text-center">#</th>
+          <table className="w-full text-left border-collapse text-sm whitespace-nowrap relative">
+            <thead className="sticky top-0 z-30">
+              <tr className="border-b border-surface text-textMuted bg-surface">
+                <th className="p-3 font-semibold w-[50px] min-w-[50px] text-center sticky left-0 z-30 bg-surface">✔</th>
+                <th className="p-3 font-semibold w-[40px] min-w-[40px] text-center sticky left-[50px] z-30 bg-surface shadow-[4px_0_6px_-2px_rgba(0,0,0,0.05)]">#</th>
                 <SortHeader label="Company Name" sortKey="name" />
                 <SortHeader label="Website" sortKey="website" />
                 <SortHeader label="Phone" sortKey="phone" />
@@ -279,7 +314,8 @@ export default function WorkflowsView() {
                   <>
                     <SortHeader label="Email" sortKey="email" />
                     <SortHeader label="Facebook" sortKey="facebook" />
-                    <SortHeader label="Instagram" sortKey="instagram" />
+                    <SortHeader label="Insta DM" sortKey="instagram" />
+                    <SortHeader label="Instagram Profile" sortKey="instagram" />
                     <SortHeader label="Twitter" sortKey="twitter" />
                     <SortHeader label="Status" sortKey="status" />
                   </>
@@ -288,12 +324,12 @@ export default function WorkflowsView() {
               </tr>
             </thead>
             <tbody>
-              {sortedLeads.map((lead, i) => (
-                <tr key={lead.originalIndex} className="border-b border-surface hover:bg-surface/30 transition-colors">
-                  <td className="p-3 text-center">
+              {getExpandedLeads(sortedLeads).map((lead, i) => (
+                <tr key={`${lead.originalIndex}-${lead.emailIndex || 0}`} className={`group border-b border-surface transition-colors ${lead.isDuplicateEmail ? 'bg-gray-500/10 hover:bg-gray-500/20' : 'hover:bg-surface/30'}`}>
+                  <td className={`p-3 text-center sticky left-0 z-20 ${lead.isDuplicateEmail ? 'bg-[#f3f4f6] dark:bg-[#1f2937]' : 'bg-background group-hover:bg-surface'}`}>
                     <input type="checkbox" checked={lead.checked || false} onChange={(e) => handleLeadCheck(lead.originalIndex, e.target.checked)} className="cursor-pointer" />
                   </td>
-                  <td className="p-3 text-center text-textMuted w-[10px] min-w-[10px]">{i + 1}</td>
+                  <td className={`p-3 text-center text-textMuted w-[40px] min-w-[40px] sticky left-[50px] z-20 shadow-[4px_0_6px_-2px_rgba(0,0,0,0.05)] ${lead.isDuplicateEmail ? 'bg-[#f3f4f6] dark:bg-[#1f2937]' : 'bg-background group-hover:bg-surface'}`}>{lead.originalSortIndex + 1}</td>
                   <td className="p-3 max-w-[150px] truncate" title={lead.name}>{lead.name || 'Unnamed Business'}</td>
                   <td className="p-3 min-w-[60px] max-w-[150px] truncate" title={lead.website}>
                     {lead.website ? <a href={lead.website} target="_blank" rel="noreferrer" className="text-primary hover:underline">{lead.website}</a> : '-'}
@@ -303,7 +339,8 @@ export default function WorkflowsView() {
                     <>
                       <td className="p-3 min-w-[60px] max-w-[150px] truncate" title={lead.email}>{lead.email ? <a href={`https://mail.google.com/mail/?view=cm&fs=1&to=${lead.email}`} target="_blank" rel="noreferrer" className="text-green-500 hover:underline">{lead.email}</a> : '-'}</td>
                       <td className="p-3 min-w-[60px] max-w-[150px] truncate" title={lead.facebook}>{lead.facebook ? <a href={getFbMessageLink(lead.facebook)} target="_blank" rel="noreferrer" className="text-primary hover:underline" title="Send Message on Facebook">{lead.facebook}</a> : '-'}</td>
-                      <td className="p-3 min-w-[60px] max-w-[150px] truncate" title={lead.instagram}>{lead.instagram ? <a href={getIgMessageLink(lead.instagram)} target="_blank" rel="noreferrer" className="text-primary hover:underline" title="Send Message on Instagram">{lead.instagram}</a> : '-'}</td>
+                      <td className="p-3 min-w-[60px] max-w-[150px] truncate" title={lead.instagram}>{lead.instagram ? <a href={getIgMessageLink(lead.instagram)} target="_blank" rel="noreferrer" className="text-primary hover:underline" title="Send Message on Instagram">Message</a> : '-'}</td>
+                      <td className="p-3 min-w-[60px] max-w-[150px] truncate" title={lead.instagram}>{lead.instagram ? <a href={lead.instagram} target="_blank" rel="noreferrer" className="text-primary hover:underline">{lead.instagram}</a> : '-'}</td>
                       <td className="p-3 min-w-[60px] max-w-[150px] truncate" title={lead.twitter}>{lead.twitter ? <a href={lead.twitter} target="_blank" rel="noreferrer" className="text-primary hover:underline">{lead.twitter}</a> : '-'}</td>
                       <td className="p-3 max-w-[100px] truncate" title={lead.error}>
                         {lead.error ? <span className="inline-block px-2 py-0.5 rounded text-xs font-medium bg-surface text-textMuted border border-secondary/20">Failed</span> : ((lead.email || lead.phone || lead.website) ? <span className="inline-block px-2 py-0.5 rounded text-xs font-medium bg-surface text-textMuted border border-secondary/20">Completed</span> : <span className="text-textMuted">-</span>)}
@@ -338,33 +375,87 @@ export default function WorkflowsView() {
           <p className="text-sm text-textMuted text-center py-10">You have no workflows yet. Try scraping Google Maps!</p>
         ) : (
           <div className="space-y-3">
-            {workflows.map(wf => (
-              <div 
-                key={wf.id} 
-                onClick={() => setActiveWorkflowId(wf.id)}
-                className="p-4 border border-secondary/20 rounded-lg flex items-center justify-between cursor-pointer hover:border-primary/30 hover:bg-surface/80 transition-all group"
-              >
-                <div>
-                  <h4 className="font-semibold text-textMain group-hover:text-primary transition-colors">{wf.title}</h4>
-                  <p className="text-xs text-textMuted mt-1">
-                    {new Date(wf.timestamp).toLocaleDateString()} at {new Date(wf.timestamp).toLocaleTimeString()} • {wf.leads.length} leads
-                  </p>
-                </div>
-                <div className="flex items-center space-x-4">
-                  {wf.enriched && (
-                    <span className="px-2 py-1 rounded text-xs font-bold bg-primary/10 text-primary uppercase">Processed</span>
-                  )}
-                  <button 
-                    onClick={(e) => { e.stopPropagation(); deleteWorkflow(wf.id); }}
-                    className="p-2 text-textMuted hover:text-red-500 hover:bg-red-500/10 rounded transition-colors"
-                    title="Delete workflow"
-                  >
-                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
-                  </button>
-                  <svg className="w-5 h-5 text-secondary group-hover:text-primary transition-colors ml-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7 7"></path></svg>
-                </div>
-              </div>
-            ))}
+            {(() => {
+              const groups = {};
+              workflows.forEach(wf => {
+                const match = wf.title.match(/^(.*?)(?:\s+in\s+|\s+-\s+)(.*)$/i);
+                const niche = match ? match[1].trim() : wf.title.trim();
+                const location = match ? match[2].trim() : 'Unknown Location';
+                
+                if (!groups[niche]) {
+                  groups[niche] = { niche, workflows: [], totalLeads: 0, latestTimestamp: 0, ids: [] };
+                }
+                groups[niche].workflows.push({ ...wf, parsedLocation: location });
+                groups[niche].totalLeads += wf.leads.length;
+                groups[niche].ids.push(wf.id);
+                if (wf.timestamp > groups[niche].latestTimestamp) {
+                  groups[niche].latestTimestamp = wf.timestamp;
+                }
+              });
+              
+              const sortedGroups = Object.values(groups).sort((a, b) => b.latestTimestamp - a.latestTimestamp);
+              
+              return sortedGroups.map(group => {
+                const isExpanded = expandedGroups[group.niche];
+
+                return (
+                  <div key={group.niche} className="bg-surface rounded-xl border border-secondary/10 overflow-hidden shadow-sm">
+                    {/* Group Header */}
+                    <div 
+                      className="p-4 hover:bg-surface/80 cursor-pointer transition-all flex items-center justify-between"
+                      onClick={() => toggleGroup(group.niche)}
+                    >
+                      <div className="flex-1 min-w-0 pr-4">
+                        <h3 className="font-semibold text-base truncate text-textMain group-hover:text-primary transition-colors">{group.niche}</h3>
+                        <div className="flex items-center space-x-2 mt-1">
+                          <span className="text-xs text-textMuted bg-background px-2 py-0.5 rounded-full border border-secondary/20">
+                            {group.workflows.length} {group.workflows.length === 1 ? 'Location' : 'Locations'}
+                          </span>
+                          <span className="text-xs text-textMuted">• {group.totalLeads} total leads</span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center shrink-0">
+                        <svg className={`w-5 h-5 text-textMuted transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
+                      </div>
+                    </div>
+
+                    {/* Group Content */}
+                    {isExpanded && (
+                      <div className="border-t border-secondary/10 bg-background/50 p-2 space-y-2">
+                        {group.workflows.sort((a, b) => b.timestamp - a.timestamp).map(wf => (
+                          <div 
+                            key={wf.id} 
+                            onClick={() => setActiveWorkflowId(wf.id)}
+                            className="p-3 border border-secondary/20 rounded-lg flex items-center justify-between cursor-pointer hover:border-primary/30 hover:bg-surface/80 transition-all group ml-4"
+                          >
+                            <div>
+                              <h4 className="font-medium text-sm text-textMain group-hover:text-primary transition-colors">{wf.parsedLocation}</h4>
+                              <p className="text-xs text-textMuted mt-1">
+                                {new Date(wf.timestamp).toLocaleDateString()} at {new Date(wf.timestamp).toLocaleTimeString()} • {wf.leads.length} leads
+                              </p>
+                            </div>
+                            <div className="flex items-center space-x-4">
+                              {wf.enriched && (
+                                <span className="px-2 py-1 rounded text-xs font-bold bg-primary/10 text-primary uppercase">Processed</span>
+                              )}
+                              <button 
+                                onClick={(e) => { e.stopPropagation(); deleteWorkflow(wf.id); }}
+                                className="p-1.5 text-textMuted hover:text-red-500 hover:bg-red-500/10 rounded transition-colors"
+                                title="Delete workflow"
+                              >
+                                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                              </button>
+                              <svg className="w-5 h-5 text-secondary group-hover:text-primary transition-colors ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 5l7 7-7-7"></path></svg>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              });
+            })()}
           </div>
         )}
       </div>

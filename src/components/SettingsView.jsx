@@ -14,17 +14,32 @@ export default function SettingsView({ settings, updateSettings }) {
     <div className="space-y-8">
       <div>
         <h2 className="text-2xl font-bold mb-4">Appearance</h2>
-        <div className="p-6 bg-surface rounded-xl border border-secondary/20 shadow-sm flex items-center justify-between">
-          <div>
-            <h3 className="font-semibold text-textMain">Dark Mode</h3>
-            <p className="text-sm text-textMuted">Toggle between light and dark themes</p>
+        <div className="space-y-4">
+          <div className="p-6 bg-surface rounded-xl border border-secondary/20 shadow-sm flex items-center justify-between">
+            <div>
+              <h3 className="font-semibold text-textMain">Dark Mode</h3>
+              <p className="text-sm text-textMuted">Toggle between light and dark themes</p>
+            </div>
+            <button 
+              onClick={toggleTheme}
+              className={`w-12 h-6 rounded-full p-1 transition-colors ${settings.theme === 'dark' ? 'bg-primary' : 'bg-secondary/30'}`}
+            >
+              <div className={`w-4 h-4 rounded-full bg-white transition-transform ${settings.theme === 'dark' ? 'translate-x-6' : 'translate-x-0'}`}></div>
+            </button>
           </div>
-          <button 
-            onClick={toggleTheme}
-            className={`w-12 h-6 rounded-full p-1 transition-colors ${settings.theme === 'dark' ? 'bg-primary' : 'bg-secondary/30'}`}
-          >
-            <div className={`w-4 h-4 rounded-full bg-white transition-transform ${settings.theme === 'dark' ? 'translate-x-6' : 'translate-x-0'}`}></div>
-          </button>
+
+          <div className="p-6 bg-surface rounded-xl border border-secondary/20 shadow-sm flex items-center justify-between">
+            <div>
+              <h3 className="font-semibold text-textMain">Show Action Widget</h3>
+              <p className="text-sm text-textMuted">Show or hide the floating Lead Scraper & Autofill widget</p>
+            </div>
+            <button 
+              onClick={() => updateSettings({ showAutofillButtons: !settings.showAutofillButtons })}
+              className={`w-12 h-6 rounded-full p-1 transition-colors ${settings.showAutofillButtons !== false ? 'bg-primary' : 'bg-secondary/30'}`}
+            >
+              <div className={`w-4 h-4 rounded-full bg-white transition-transform ${settings.showAutofillButtons !== false ? 'translate-x-6' : 'translate-x-0'}`}></div>
+            </button>
+          </div>
         </div>
       </div>
 

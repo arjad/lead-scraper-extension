@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 
 const DEFAULT_SETTINGS = {
   theme: 'light', // 'light' or 'dark'
+  showAutofillButtons: true,
   csvHeaders: {
     Name: true,
     Rating: true,

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import './index.css'
-import { exportToCSV } from './helpers.js'
+import { exportToCSV } from './exportHelpers.js'
 import { useSettings } from './hooks/useSettings.js'
 import { useWorkflows } from './hooks/useWorkflows.js'
 import { useAuth } from './hooks/useAuth.js'
@@ -15,8 +15,29 @@ function App() {
   
   const [view, setView] = useState('home') // 'home' | 'workflow'
   const [activeWorkflowId, setActiveWorkflowId] = useState(null)
-  const [selectedWorkflows, setSelectedWorkflows] = useState([])
+  const [selectedWorkflows, setSelectedWorkflows] = useState(() => {
+    try {
+      const saved = localStorage.getItem('selectedWorkflows');
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      return [];
+    }
+  });
   const [exportDropdownOpen, setExportDropdownOpen] = useState(false)
+  const [showDuplicates, setShowDuplicates] = useState(true)
+  const [expandedGroups, setExpandedGroups] = useState({});
+
+  const toggleGroup = (niche) => {
+    setExpandedGroups(prev => ({ ...prev, [niche]: !prev[niche] }));
+  };
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('selectedWorkflows', JSON.stringify(selectedWorkflows));
+    } catch (e) {
+      console.error('Failed to save selected workflows to local storage', e);
+    }
+  }, [selectedWorkflows]);
 
   useEffect(() => {
     if (token) {
@@ -46,22 +67,14 @@ function App() {
   const activeWorkflow = workflows.find(w => w.id === activeWorkflowId)
 
   const handleScrape = async () => {
-    if (!token) {
-      setError(
-        <span>
-          You must be logged in to start workflows. <button onClick={() => openSettings('profile')} className="underline font-semibold hover:text-red-300 transition-colors">Log in here</button>.
-        </span>
-      )
-      return
-    }
 
     setLoading(true)
     setError(null)
     try {
       let [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
       
-      if (!tab.url.includes("google.com/maps")) {
-        setError("Please navigate to Google Maps to scrape leads.")
+      if (!tab.url.includes("google.com/maps") && !tab.url.includes("google.com/search")) {
+        setError("Please navigate to Google Maps or Google Search to scrape leads.")
         setLoading(false)
         return
       }
@@ -112,19 +125,11 @@ function App() {
     if (format === 'csv') {
       exportToCSV(selectedData, `selected_workflows_leads.csv`, settings.csvHeaders);
     } else {
-      import('./helpers.js').then(m => m.exportToExcel(selectedData, `selected_workflows_leads.xls`, settings.csvHeaders));
+      import('./exportHelpers.js').then(m => m.exportToExcel(selectedData, `selected_workflows_leads.xls`, settings.csvHeaders));
     }
   }
 
   const startIndividualScraping = async () => {
-    if (!token) {
-      setError(
-        <span>
-          You must be logged in to process leads. <button onClick={() => openSettings('profile')} className="underline font-semibold hover:text-red-300 transition-colors">Log in here</button>.
-        </span>
-      )
-      return
-    }
     if (!activeWorkflow) return;
 
     let leadsToProcess = activeWorkflow.leads;
@@ -258,6 +263,28 @@ function App() {
 
 
 
+  const getExpandedLeads = (leads) => {
+    if (!leads) return [];
+    const expanded = [];
+    leads.forEach((lead, originalIndex) => {
+      if (showDuplicates && lead.email && lead.email.includes(',')) {
+        const emails = lead.email.split(',').map(e => e.trim()).filter(Boolean);
+        emails.forEach((email, i) => {
+          expanded.push({
+            ...lead,
+            originalIndex: lead.originalIndex ?? originalIndex,
+            email: email,
+            isDuplicateEmail: i > 0,
+            emailIndex: i
+          });
+        });
+      } else {
+        expanded.push({ ...lead, originalIndex: lead.originalIndex ?? originalIndex });
+      }
+    });
+    return expanded;
+  };
+
   return (
     <div className="w-full h-full flex flex-col p-5 bg-background text-textMain relative">
       
@@ -348,52 +375,129 @@ function App() {
             {workflows.length === 0 ? (
               <div className="text-center py-10 text-sm text-textMuted">No workflows yet. Try scraping a page!</div>
             ) : (
-              workflows.map(wf => (
-                <div 
-                  key={wf.id} 
-                  className="relative group p-4 bg-surface rounded-xl border border-secondary/10 hover:border-secondary/30 hover:bg-surface/80 cursor-pointer transition-all flex items-center justify-between"
-                  onClick={() => { setActiveWorkflowId(wf.id); setView('workflow') }}
-                >
-                  <div className="shrink-0 pr-4 flex items-center justify-center h-full">
-                    <input 
-                      type="checkbox" 
-                      checked={selectedWorkflows.includes(wf.id)}
-                      onClick={(e) => e.stopPropagation()}
-                      onChange={(e) => {
-                        if (e.target.checked) setSelectedWorkflows(prev => [...prev, wf.id]);
-                        else setSelectedWorkflows(prev => prev.filter(id => id !== wf.id));
-                      }}
-                      className="w-4 h-4 cursor-pointer text-primary border-secondary/30 rounded focus:ring-primary/50"
-                    />
-                  </div>
+              (() => {
+                const groups = {};
+                workflows.forEach(wf => {
+                  const match = wf.title.match(/^(.*?)(?:\s+in\s+|\s+-\s+)(.*)$/i);
+                  const niche = match ? match[1].trim() : wf.title.trim();
+                  const location = match ? match[2].trim() : 'Unknown Location';
                   
-                  <div className="flex-1 min-w-0 pr-4">
-                    <h3 className="font-semibold text-sm truncate text-textMain group-hover:text-primary transition-colors">{wf.title}</h3>
-                    <div className="flex items-center space-x-2 mt-2">
-                      <span className="px-2 py-0.5 border border-secondary/20 rounded-full text-[10px] text-textMuted">
-                        {new Date(wf.timestamp).toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' })}
-                      </span>
-                      <span className="text-xs text-textMuted">• {wf.leads.length} leads</span>
+                  if (!groups[niche]) {
+                    groups[niche] = { niche, workflows: [], totalLeads: 0, latestTimestamp: 0, ids: [] };
+                  }
+                  groups[niche].workflows.push({ ...wf, parsedLocation: location });
+                  groups[niche].totalLeads += wf.leads.length;
+                  groups[niche].ids.push(wf.id);
+                  if (wf.timestamp > groups[niche].latestTimestamp) {
+                    groups[niche].latestTimestamp = wf.timestamp;
+                  }
+                });
+                
+                const sortedGroups = Object.values(groups).sort((a, b) => b.latestTimestamp - a.latestTimestamp);
+                
+                return sortedGroups.map(group => {
+                  const isExpanded = expandedGroups[group.niche];
+                  const isAllSelected = group.ids.every(id => selectedWorkflows.includes(id));
+                  const isSomeSelected = group.ids.some(id => selectedWorkflows.includes(id)) && !isAllSelected;
+
+                  return (
+                    <div key={group.niche} className="bg-surface rounded-xl border border-secondary/10 overflow-hidden">
+                      {/* Group Header */}
+                      <div 
+                        className="p-4 hover:bg-surface/80 cursor-pointer transition-all flex items-center justify-between"
+                        onClick={() => toggleGroup(group.niche)}
+                      >
+                        <div className="shrink-0 pr-4 flex items-center justify-center h-full">
+                          <input 
+                            type="checkbox"
+                            ref={input => {
+                              if (input) {
+                                input.indeterminate = isSomeSelected;
+                              }
+                            }}
+                            checked={isAllSelected}
+                            onClick={(e) => e.stopPropagation()}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedWorkflows(prev => [...new Set([...prev, ...group.ids])]);
+                              } else {
+                                setSelectedWorkflows(prev => prev.filter(id => !group.ids.includes(id)));
+                              }
+                            }}
+                            className="w-4 h-4 cursor-pointer text-primary border-secondary/30 rounded focus:ring-primary/50"
+                          />
+                        </div>
+                        
+                        <div className="flex-1 min-w-0 pr-4">
+                          <h3 className="font-semibold text-sm truncate text-textMain group-hover:text-primary transition-colors">{group.niche}</h3>
+                          <div className="flex items-center space-x-2 mt-1">
+                            <span className="text-xs text-textMuted bg-background px-2 py-0.5 rounded-full border border-secondary/20">
+                              {group.workflows.length} {group.workflows.length === 1 ? 'Location' : 'Locations'}
+                            </span>
+                            <span className="text-xs text-textMuted">• {group.totalLeads} total leads</span>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center shrink-0">
+                          <svg className={`w-5 h-5 text-textMuted transition-transform duration-200 ${isExpanded ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
+                        </div>
+                      </div>
+
+                      {/* Group Content (Workflows by Location) */}
+                      {isExpanded && (
+                        <div className="border-t border-secondary/10 bg-background/50 p-2 space-y-2">
+                          {group.workflows.sort((a, b) => b.timestamp - a.timestamp).map(wf => (
+                            <div 
+                              key={wf.id} 
+                              className="relative group p-3 bg-surface rounded-lg border border-secondary/5 hover:border-secondary/30 hover:bg-surface/80 cursor-pointer transition-all flex items-center justify-between ml-8"
+                              onClick={() => { setActiveWorkflowId(wf.id); setView('workflow') }}
+                            >
+                              <div className="shrink-0 pr-3 flex items-center justify-center h-full">
+                                <input 
+                                  type="checkbox" 
+                                  checked={selectedWorkflows.includes(wf.id)}
+                                  onClick={(e) => e.stopPropagation()}
+                                  onChange={(e) => {
+                                    if (e.target.checked) setSelectedWorkflows(prev => [...prev, wf.id]);
+                                    else setSelectedWorkflows(prev => prev.filter(id => id !== wf.id));
+                                  }}
+                                  className="w-3.5 h-3.5 cursor-pointer text-primary border-secondary/30 rounded focus:ring-primary/50"
+                                />
+                              </div>
+                              
+                              <div className="flex-1 min-w-0 pr-3">
+                                <h4 className="font-medium text-xs truncate text-textMain group-hover:text-primary transition-colors">{wf.parsedLocation}</h4>
+                                <div className="flex items-center space-x-2 mt-1">
+                                  <span className="text-[10px] text-textMuted">
+                                    {new Date(wf.timestamp).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
+                                  </span>
+                                  <span className="text-[10px] text-textMuted">• {wf.leads.length} leads</span>
+                                </div>
+                              </div>
+                              
+                              <div className="flex items-center space-x-2 shrink-0">
+                                {(wf.status === 'scraping' || wf.status === 'enriching') && (
+                                   <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-yellow-500/10 text-yellow-600 uppercase tracking-wide hidden sm:inline-block">In Progress</span>
+                                )}
+                                {wf.enriched && wf.status === 'completed' && (
+                                  <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-primary/10 text-primary uppercase tracking-wide hidden sm:inline-block">Processed</span>
+                                )}
+                                <button 
+                                  onClick={(e) => { e.stopPropagation(); deleteWorkflow(wf.id); }}
+                                  className="text-textMuted p-1 rounded hover:bg-red-50 hover:text-red-500 transition-colors z-10"
+                                  title="Delete Workflow"
+                                >
+                                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
-                  </div>
-                  
-                  <div className="flex items-center space-x-3 shrink-0">
-                    {(wf.status === 'scraping' || wf.status === 'enriching') && (
-                       <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-yellow-500/10 text-yellow-600 uppercase tracking-wide hidden sm:inline-block">In Progress</span>
-                    )}
-                    {wf.enriched && wf.status === 'completed' && (
-                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-primary/10 text-primary uppercase tracking-wide hidden sm:inline-block">Processed</span>
-                    )}
-                    <button 
-                      onClick={(e) => { e.stopPropagation(); deleteWorkflow(wf.id); }}
-                      className="text-textMuted p-1.5 rounded hover:bg-red-50 hover:text-red-500 transition-colors z-10"
-                      title="Delete Workflow"
-                    >
-                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
-                    </button>
-                  </div>
-                </div>
-              ))
+                  );
+                });
+              })()
             )}
           </div>
         </div>
@@ -469,12 +573,19 @@ function App() {
             </div>
           </div>
           
+          <div className="mb-3 px-2 flex items-center">
+            <label className="flex items-center space-x-2 text-sm text-textMuted cursor-pointer hover:text-textMain transition-colors">
+              <input type="checkbox" checked={showDuplicates} onChange={(e) => setShowDuplicates(e.target.checked)} className="rounded border-secondary/30 text-primary focus:ring-primary/50 cursor-pointer" />
+              <span>Show all duplicate emails</span>
+            </label>
+          </div>
+          
           <div className="flex-1 overflow-auto -mx-5">
-            <table className="w-full text-left border-collapse text-sm whitespace-nowrap">
-              <thead className="sticky top-0 bg-background z-10">
-                <tr className="border-b border-surface text-textMuted bg-surface/50">
-                  <th className="p-3 pl-5 font-semibold w-[10px] min-w-[10px] text-center">✔</th>
-                  <th className="p-3 font-semibold w-[10px] min-w-[10px] text-center">#</th>
+            <table className="w-full text-left border-collapse text-sm whitespace-nowrap relative">
+              <thead className="sticky top-0 z-30">
+                <tr className="border-b border-surface text-textMuted bg-surface">
+                  <th className="p-3 pl-5 font-semibold w-[50px] min-w-[50px] text-center sticky left-0 z-30 bg-surface">✔</th>
+                  <th className="p-3 font-semibold w-[40px] min-w-[40px] text-center sticky left-[50px] z-30 bg-surface shadow-[4px_0_6px_-2px_rgba(0,0,0,0.05)]">#</th>
                   <th className="p-3 font-semibold">Company Name</th>
                   <th className="p-3 font-semibold">Website</th>
                   <th className="p-3 font-semibold">Phone</th>
@@ -482,20 +593,22 @@ function App() {
                     <>
                       <th className="p-3 font-semibold">Email</th>
                       <th className="p-3 font-semibold">Facebook</th>
-                      <th className="p-3 font-semibold">Instagram</th>
+                      <th className="p-3 font-semibold">Insta DM</th>
+                      <th className="p-3 font-semibold">Instagram Profile</th>
                       <th className="p-3 font-semibold">Twitter</th>
+                      <th className="p-3 font-semibold">LinkedIn</th>
                       <th className="p-3 pr-5 font-semibold">Status</th>
                     </>
                   )}
                 </tr>
               </thead>
               <tbody>
-                {activeWorkflow.leads.map((lead, i) => (
-                  <tr key={i} className="border-b border-surface hover:bg-surface/30 transition-colors">
-                    <td className="p-3 pl-5 text-center">
-                      <input type="checkbox" checked={lead.checked || false} onChange={(e) => handleLeadCheck(i, e.target.checked)} className="cursor-pointer" />
+                {getExpandedLeads(activeWorkflow.leads).map((lead, i) => (
+                  <tr key={`${lead.originalIndex}-${lead.emailIndex || 0}`} className={`group border-b border-surface transition-colors ${lead.isDuplicateEmail ? 'bg-gray-500/10 hover:bg-gray-500/20' : 'hover:bg-surface/30'}`}>
+                    <td className={`p-3 pl-5 text-center sticky left-0 z-20 ${lead.isDuplicateEmail ? 'bg-[#f3f4f6] dark:bg-[#1f2937]' : 'bg-background group-hover:bg-surface'}`}>
+                      <input type="checkbox" checked={lead.checked || false} onChange={(e) => handleLeadCheck(lead.originalIndex, e.target.checked)} className="cursor-pointer" />
                     </td>
-                    <td className="p-3 text-center text-textMuted w-[10px] min-w-[10px]">{i + 1}</td>
+                    <td className={`p-3 text-center text-textMuted w-[40px] min-w-[40px] sticky left-[50px] z-20 shadow-[4px_0_6px_-2px_rgba(0,0,0,0.05)] ${lead.isDuplicateEmail ? 'bg-[#f3f4f6] dark:bg-[#1f2937]' : 'bg-background group-hover:bg-surface'}`}>{lead.originalIndex + 1}</td>
                     <td className="p-3 max-w-[150px] truncate" title={lead.name}>{lead.name || 'Unnamed Business'}</td>
                     <td className="p-3 min-w-[60px] max-w-[150px] truncate" title={lead.website}>
                       {lead.website ? <a href={lead.website} target="_blank" rel="noreferrer" className="text-primary hover:underline">{lead.website}</a> : '-'}
@@ -505,8 +618,10 @@ function App() {
                       <>
                         <td className="p-3 min-w-[60px] max-w-[150px] truncate" title={lead.email}>{lead.email ? <a href={`https://mail.google.com/mail/?view=cm&fs=1&to=${lead.email}`} target="_blank" rel="noreferrer" className="text-green-500 hover:underline">{lead.email}</a> : '-'}</td>
                         <td className="p-3 min-w-[60px] max-w-[150px] truncate" title={lead.facebook}>{lead.facebook ? <a href={getFbMessageLink(lead.facebook)} target="_blank" rel="noreferrer" className="text-primary hover:underline" title="Send Message on Facebook">{lead.facebook}</a> : '-'}</td>
-                        <td className="p-3 min-w-[60px] max-w-[150px] truncate" title={lead.instagram}>{lead.instagram ? <a href={getIgMessageLink(lead.instagram)} target="_blank" rel="noreferrer" className="text-primary hover:underline" title="Send Message on Instagram">{lead.instagram}</a> : '-'}</td>
+                        <td className="p-3 min-w-[60px] max-w-[150px] truncate" title={lead.instagram}>{lead.instagram ? <a href={getIgMessageLink(lead.instagram)} target="_blank" rel="noreferrer" className="text-primary hover:underline" title="Send Message on Instagram">Message</a> : '-'}</td>
+                        <td className="p-3 min-w-[60px] max-w-[150px] truncate" title={lead.instagram}>{lead.instagram ? <a href={lead.instagram} target="_blank" rel="noreferrer" className="text-primary hover:underline">{lead.instagram}</a> : '-'}</td>
                         <td className="p-3 min-w-[60px] max-w-[150px] truncate" title={lead.twitter}>{lead.twitter ? <a href={lead.twitter} target="_blank" rel="noreferrer" className="text-primary hover:underline">{lead.twitter}</a> : '-'}</td>
+                        <td className="p-3 min-w-[60px] max-w-[150px] truncate" title={lead.linkedin}>{lead.linkedin ? <a href={lead.linkedin} target="_blank" rel="noreferrer" className="text-primary hover:underline">{lead.linkedin}</a> : '-'}</td>
                         <td className="p-3 pr-5 max-w-[100px] truncate" title={lead.status || '-'}>
                           {(lead.status === 'success' || (!lead.error && (lead.email || lead.phone || lead.website))) ? <span className="inline-block px-2 py-0.5 rounded text-xs font-medium bg-surface text-textMuted border border-secondary/20">Completed</span> : (lead.status === 'failed' ? <span className="inline-block px-2 py-0.5 rounded text-xs font-medium bg-surface text-textMuted border border-secondary/20">Failed</span> : (lead.status === 'pending' ? <span className="text-yellow-500">Pending</span> : (lead.status === 'processing' ? <span className="text-blue-400">Processing</span> : (!lead.error ? <span className="text-textMuted">-</span> : null))))}
                           {lead.error && <div className="text-red-400 text-xs mt-1">{lead.error}</div>}
