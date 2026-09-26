@@ -185,14 +185,20 @@ function App() {
     updateWorkflow(activeWorkflow.id, { status: 'enriching' })
     
     try {
-      // POST to /process-leads
+      // POST to /process-leads with 15s timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
+      
       const response = await fetch(`${API_BASE_URL}/process-leads`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({ leads: leadsToProcess })
+        body: JSON.stringify({ leads: leadsToProcess }),
+        signal: controller.signal
       });
+      
+      clearTimeout(timeoutId);
       
       if (!response.ok) {
         throw new Error(`Failed to start job. Status: ${response.status}`);
@@ -200,12 +206,26 @@ function App() {
       
       const { job_id } = await response.json();
       
-      // Stop automatic polling as requested. Instead, we save the job_id.
+      // Save job_id to workflow
       updateWorkflow(activeWorkflow.id, { status: 'enriching', job_id: job_id });
+      
+      // Also save job_id directly to chrome.storage as backup
+      // (in case popup closes before React state update persists)
+      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+        chrome.storage.local.get(['leadScrapperWorkflows'], (result) => {
+          const wfs = result.leadScrapperWorkflows || [];
+          const updated = wfs.map(w => w.id === activeWorkflow.id ? { ...w, status: 'enriching', job_id: job_id } : w);
+          chrome.storage.local.set({ leadScrapperWorkflows: updated });
+        });
+      }
+      
       setEnriching(false);
 
     } catch (err) {
-      setError("Scraping request failed: " + err.message)
+      const message = err.name === 'AbortError' 
+        ? "Request timed out. The backend server may be down." 
+        : "Scraping request failed: " + err.message;
+      setError(message)
       updateWorkflow(activeWorkflow.id, { status: 'completed' })
       setEnriching(false)
     }
@@ -245,10 +265,17 @@ function App() {
   };
 
   const handleRefreshStatus = async () => {
-    if (!activeWorkflow || !activeWorkflow.job_id) return;
+    if (!activeWorkflow) return;
     
     setEnriching(true);
     setError(null);
+
+    if (!activeWorkflow.job_id) {
+      setError("No job ID found. Please start individual scraping first.");
+      setEnriching(false);
+      return;
+    }
+
     try {
       const statusRes = await fetch(`${API_BASE_URL}/job-status/${activeWorkflow.job_id}`);
       if (!statusRes.ok) throw new Error("Failed to fetch status");

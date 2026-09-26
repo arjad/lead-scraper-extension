@@ -140,16 +140,22 @@ export default function WorkflowsView() {
 
     setEnriching(true)
     setError(null)
-    updateWorkflow(activeWorkflow.id, { status: 'enriching' })
     
     try {
+      // POST with 15s timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
+      
       const response = await fetch(`${API_BASE_URL}/process-leads`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({ leads: activeWorkflow.leads })
+        body: JSON.stringify({ leads: activeWorkflow.leads }),
+        signal: controller.signal
       });
+      
+      clearTimeout(timeoutId);
       
       if (!response.ok) {
         throw new Error(`Failed to start job. Status: ${response.status}`);
@@ -157,24 +163,53 @@ export default function WorkflowsView() {
       
       const { job_id } = await response.json();
       
-      // Stop automatic polling. Just save the job_id.
+      // Save job_id to workflow
       updateWorkflow(activeWorkflow.id, { status: 'enriching', job_id: job_id });
+      
+      // Also save job_id directly to chrome.storage as backup
+      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+        chrome.storage.local.get(['leadScrapperWorkflows'], (result) => {
+          const wfs = result.leadScrapperWorkflows || [];
+          const updated = wfs.map(w => w.id === activeWorkflow.id ? { ...w, status: 'enriching', job_id: job_id } : w);
+          chrome.storage.local.set({ leadScrapperWorkflows: updated });
+        });
+      }
+      
       setEnriching(false);
 
     } catch (err) {
-      setError("Scraping request failed: " + err.message)
+      const message = err.name === 'AbortError' 
+        ? "Request timed out. The backend server may be down." 
+        : "Scraping request failed: " + err.message;
+      setError(message)
       updateWorkflow(activeWorkflow.id, { status: 'completed' })
       setEnriching(false)
     }
   }
 
   const handleRefreshStatus = async () => {
-    if (!activeWorkflow || !activeWorkflow.job_id) return;
+    if (!activeWorkflow) return;
     
     setEnriching(true);
     setError(null);
+
+    if (!activeWorkflow.job_id) {
+      setError("No job ID found. Resetting state so you can start again.");
+      updateWorkflow(activeWorkflow.id, { status: 'completed' });
+      setEnriching(false);
+      return;
+    }
+
     try {
-      const statusRes = await fetch(`${API_BASE_URL}/job-status/${activeWorkflow.job_id}`);
+      // Fetch with 15s timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
+      
+      const statusRes = await fetch(`${API_BASE_URL}/job-status/${activeWorkflow.job_id}`, {
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeoutId);
       if (!statusRes.ok) throw new Error("Failed to fetch status");
       
       const statusData = await statusRes.json();
@@ -212,7 +247,10 @@ export default function WorkflowsView() {
       }
     } catch (err) {
       console.error(err);
-      setError("Failed to fetch results: " + err.message);
+      const message = err.name === 'AbortError' 
+        ? "Request timed out. The backend server may be down." 
+        : "Failed to fetch results: " + err.message;
+      setError(message);
     } finally {
       setEnriching(false);
     }
