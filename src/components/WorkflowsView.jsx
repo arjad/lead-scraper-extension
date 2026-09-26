@@ -3,7 +3,7 @@ import { useWorkflows } from '../hooks/useWorkflows.js';
 import { useSettings } from '../hooks/useSettings.js';
 import { exportToCSV } from '../exportHelpers.js';
 
-const API_BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://127.0.0.1:8000';
+const API_BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://32.196.131.37:8000';
 
 export default function WorkflowsView() {
   const { workflows, deleteWorkflow, updateWorkflow } = useWorkflows()

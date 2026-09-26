@@ -27,7 +27,7 @@
     }
   ],
   "permissions": ["activeTab", "scripting", "storage"],
-  "host_permissions": ["<all_urls>", "http://127.0.0.1/*", "http://localhost/*"],
+  "host_permissions": ["<all_urls>", "http://127.0.0.1/*", "http://localhost/*", "http://32.196.131.37/*"],
   "web_accessible_resources": [
     {
       "resources": ["index.html"],
