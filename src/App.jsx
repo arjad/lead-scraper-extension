@@ -8,6 +8,22 @@ import AuthView from './components/AuthView.jsx'
 
 const API_BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://32.196.131.37:8000';
 
+// Validation helpers for scraped data
+function validateEmail(email) {
+  if (!email) return '';
+  // Split comma-separated emails and validate each
+  const emails = email.split(',').map(e => e.trim()).filter(e => e.includes('@'));
+  return emails.join(', ');
+}
+
+function validatePhone(phone) {
+  if (!phone) return '';
+  // Strip letters (keep digits, +, -, (), spaces, dots)
+  const cleaned = phone.replace(/[^0-9+\-().\s]/g, '').trim();
+  const digits = cleaned.replace(/[^0-9]/g, '');
+  return digits.length >= 7 ? cleaned : '';
+}
+
 function App() {
   const { settings, isLoaded: settingsLoaded } = useSettings()
   const { workflows, addWorkflow, updateWorkflow, deleteWorkflow, addLeadToWorkflow, isLoaded: workflowsLoaded } = useWorkflows()
@@ -243,7 +259,17 @@ function App() {
         if (!results) return activeWorkflow.leads;
         return activeWorkflow.leads.map(originalLead => {
           const updatedLead = results.find(r => r.name === originalLead.name && r.website === originalLead.website);
-          return updatedLead || originalLead;
+          if (updatedLead) {
+            return {
+              ...updatedLead,
+              email: validateEmail(updatedLead.email),
+              phone: validatePhone(updatedLead.phone) || validatePhone(originalLead.phone),
+            };
+          }
+          return {
+            ...originalLead,
+            phone: validatePhone(originalLead.phone),
+          };
         });
       };
 
@@ -610,6 +636,7 @@ function App() {
                   <th className="p-3 pl-5 font-semibold w-[50px] min-w-[50px] text-center sticky left-0 z-30 bg-surface">✔</th>
                   <th className="p-3 font-semibold w-[40px] min-w-[40px] text-center sticky left-[50px] z-30 bg-surface shadow-[4px_0_6px_-2px_rgba(0,0,0,0.05)]">#</th>
                   <th className="p-3 font-semibold">Company Name</th>
+                  <th className="p-3 font-semibold">Address</th>
                   <th className="p-3 font-semibold">Website</th>
                   <th className="p-3 font-semibold">Phone</th>
                   {(activeWorkflow.enriched || activeWorkflow.status === 'enriching') && (
@@ -633,6 +660,7 @@ function App() {
                     </td>
                     <td className={`p-3 text-center text-textMuted w-[40px] min-w-[40px] sticky left-[50px] z-20 shadow-[4px_0_6px_-2px_rgba(0,0,0,0.05)] ${lead.isDuplicateEmail ? 'bg-[#f3f4f6] dark:bg-[#1f2937]' : 'bg-background group-hover:bg-surface'}`}>{lead.originalIndex + 1}</td>
                     <td className="p-3 max-w-[150px] truncate" title={lead.name}>{lead.name || 'Unnamed Business'}</td>
+                    <td className="p-3 min-w-[60px] max-w-[150px] truncate" title={lead.address}>{lead.address || '-'}</td>
                     <td className="p-3 min-w-[60px] max-w-[150px] truncate" title={lead.website}>
                       {lead.website ? <a href={lead.website} target="_blank" rel="noreferrer" className="text-primary hover:underline">{lead.website}</a> : '-'}
                     </td>

@@ -7,7 +7,9 @@ import {
   extractWebsite,
   extractEmail,
   extractAddressAndCategory,
-  extractStatus
+  extractStatus,
+  cleanPhone,
+  isValidEmail
 } from './helpers.js';
 
 async function scrapeMapsLeads(workflowId) {
@@ -27,6 +29,7 @@ async function scrapeMapsLeads(workflowId) {
         const { category, address } = extractAddressAndCategory(card);
         let website = extractWebsite(card);
 
+        const rawEmail = extractEmail(card);
         const newLead = {
           name: extractName(card),
           rating: extractRating(card),
@@ -35,7 +38,7 @@ async function scrapeMapsLeads(workflowId) {
           address: address,
           phone: extractPhone(card),
           website: website,
-          email: extractEmail(card),
+          email: isValidEmail(rawEmail) ? rawEmail : '',
           status: extractStatus(card)
         };
 
@@ -95,19 +98,56 @@ async function scrapePlacesLeads(workflowId) {
 
         const detailsWrapper = card.querySelector('.rllt__details');
         if (detailsWrapper) {
-           const infoDivs = Array.from(detailsWrapper.children).slice(1);
+           const infoDivs = Array.from(detailsWrapper.children).slice(1); // skip heading
            infoDivs.forEach((div, index) => {
-               const text = div.textContent;
+               const text = div.textContent.trim();
+               
                if (index === 0 && text.includes('·')) {
-                   category = text.split('·')[1]?.trim() || '';
-               } else if (index === 1 && text.includes('·')) {
+                   // First div: "4.9 (460) · Industrial real estate agency"
+                   // Category is after the last ·
                    const parts = text.split('·');
-                   address = parts[0]?.trim() || '';
-                   phone = parts[1]?.trim() || '';
+                   category = parts[parts.length - 1]?.trim() || '';
                } else if (text.toLowerCase().includes('open') || text.toLowerCase().includes('close')) {
-                   status = text.trim();
+                   // Status div: "Closed · Opens 10 am · 0300 8039311"
+                   // Phone is typically the last part after ·
+                   const parts = text.split('·').map(p => p.trim());
+                   if (parts.length > 1) {
+                     const lastPart = parts[parts.length - 1];
+                     const possiblePhone = cleanPhone(lastPart);
+                     if (possiblePhone) {
+                       phone = possiblePhone;
+                       status = parts.slice(0, -1).join(' · ').trim();
+                     } else {
+                       status = text;
+                     }
+                   } else {
+                     status = text;
+                   }
+               } else if (index >= 1 && !address) {
+                   // Middle div(s): Address like "Lahore" or info like "7+ years in business"
+                   // Skip non-address info
+                   if (!text.match(/^\d+\+?\s*years?\s+(in\s+)?business$/i) && text.length > 0) {
+                     address = text;
+                   }
                }
            });
+        }
+
+        // Fallback: if phone wasn't found in structured parsing, try regex on full text
+        if (!phone && detailsWrapper) {
+           const fullText = detailsWrapper.textContent;
+           const phoneMatch = fullText.match(/(?:\+?\d[\d\s\-().]{6,}\d)/g);
+           if (phoneMatch) {
+             // Find the best match (prefer longer ones with more digits)
+             let bestPhone = '';
+             for (const match of phoneMatch) {
+               const cleaned = cleanPhone(match);
+               if (cleaned && cleaned.replace(/[^0-9]/g, '').length > bestPhone.replace(/[^0-9]/g, '').length) {
+                 bestPhone = cleaned;
+               }
+             }
+             phone = bestPhone;
+           }
         }
         
         let website = '';

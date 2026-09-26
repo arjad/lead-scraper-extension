@@ -49,9 +49,74 @@ export function extractReviews(card) {
   return el ? el.textContent.replace(/[()]/g, '').trim() : '';
 }
 
+export function cleanPhone(raw) {
+  if (!raw) return '';
+  // A valid phone must have at least 7 digits
+  const digitsOnly = raw.replace(/[^0-9]/g, '');
+  if (digitsOnly.length < 7) return '';
+  // Strip everything except digits, +, -, (, ), spaces, and dots
+  const cleaned = raw.replace(/[^0-9+\-().\s]/g, '').trim();
+  // After cleaning, re-check we still have enough digits
+  const cleanedDigits = cleaned.replace(/[^0-9]/g, '');
+  if (cleanedDigits.length < 7) return '';
+  return cleaned;
+}
+
+export function isValidEmail(email) {
+  if (!email) return false;
+  return email.includes('@');
+}
+
+// Regex to find phone-like patterns in text
+const PHONE_REGEX = /(?:\+?\d[\d\s\-().]{6,}\d)/g;
+
+function findPhoneInText(text) {
+  if (!text) return '';
+  const matches = text.match(PHONE_REGEX);
+  if (matches && matches.length > 0) {
+    return cleanPhone(matches[0]);
+  }
+  return '';
+}
+
 export function extractPhone(card) {
+  // 1. Try the dedicated phone element first
   const el = card.querySelector('.UsdlK');
-  return el ? el.textContent.trim() : '';
+  if (el) {
+    const cleaned = cleanPhone(el.textContent.trim());
+    if (cleaned) return cleaned;
+  }
+
+  // 2. Search in the info text spans (W4Efsd) for phone patterns
+  const infoTextElements = Array.from(card.querySelectorAll('.W4Efsd .W4Efsd > span'));
+  for (const span of infoTextElements) {
+    const text = span.textContent.trim();
+    // Look for phone-like patterns in each span
+    const phone = findPhoneInText(text);
+    if (phone) return phone;
+  }
+
+  // 3. Try aria-label on the card or its parent (Google Maps sometimes puts phone here)
+  const ariaEl = card.querySelector('[aria-label*="phone"], [aria-label*="Phone"]');
+  if (ariaEl) {
+    const phone = findPhoneInText(ariaEl.getAttribute('aria-label'));
+    if (phone) return phone;
+  }
+
+  // 4. Try the action buttons area (phone icon button)
+  const phoneBtn = card.querySelector('a[data-value="Call phone number"], a[href^="tel:"]');
+  if (phoneBtn) {
+    const href = phoneBtn.getAttribute('href');
+    if (href && href.startsWith('tel:')) {
+      const cleaned = cleanPhone(href.replace('tel:', ''));
+      if (cleaned) return cleaned;
+    }
+    const label = phoneBtn.getAttribute('aria-label') || phoneBtn.textContent;
+    const phone = findPhoneInText(label);
+    if (phone) return phone;
+  }
+
+  return '';
 }
 
 export function extractWebsite(card) {
