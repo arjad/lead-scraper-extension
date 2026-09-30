@@ -3,7 +3,7 @@ import { useWorkflows } from '../hooks/useWorkflows.js';
 import { useSettings } from '../hooks/useSettings.js';
 import { exportToCSV } from '../exportHelpers.js';
 
-const API_BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://32.196.131.37:8000';
+const API_BASE_URL = import.meta.env.VITE_BACKEND_URL || 'https://32.196.131.37:8000';
 
 // Validation helpers for scraped data
 function validateEmail(email) {

@@ -6,7 +6,7 @@ import { useWorkflows } from './hooks/useWorkflows.js'
 import { useAuth } from './hooks/useAuth.js'
 import AuthView from './components/AuthView.jsx'
 
-const API_BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://32.196.131.37:8000';
+const API_BASE_URL = import.meta.env.VITE_BACKEND_URL || 'https://32.196.131.37:8000';
 
 // Validation helpers for scraped data
 function validateEmail(email) {

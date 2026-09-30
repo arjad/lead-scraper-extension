@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 
-const API_BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://32.196.131.37:8000';
+const API_BASE_URL = import.meta.env.VITE_BACKEND_URL || 'https://32.196.131.37:8000';
 
 export function useAuth() {
   const [token, setToken] = useState(null);
