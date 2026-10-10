@@ -40,6 +40,19 @@ export default function SettingsView({ settings, updateSettings }) {
               <div className={`w-4 h-4 rounded-full bg-white transition-transform ${settings.showAutofillButtons !== false ? 'translate-x-6' : 'translate-x-0'}`}></div>
             </button>
           </div>
+          <div className="p-6 bg-surface rounded-xl border border-secondary/20 shadow-sm flex flex-col">
+            <div>
+              <h3 className="font-semibold text-textMain">Message Template</h3>
+              <p className="text-sm text-textMuted mb-4">Set the default message to copy when messaging leads. Use <code className="bg-background px-1 py-0.5 rounded text-primary">{`{business_name}`}</code> as a placeholder.</p>
+            </div>
+            <input 
+              type="text" 
+              value={settings.messageTemplate !== undefined ? settings.messageTemplate : "hello, is it the owner of {business_name}"}
+              onChange={(e) => updateSettings({ messageTemplate: e.target.value })}
+              className="w-full text-sm py-2 px-3 bg-background border border-secondary/30 focus:border-primary/50 rounded-lg outline-none focus:ring-1 focus:ring-primary/50 transition-colors text-textMain"
+              placeholder="e.g. hello, is it the owner of {business_name}"
+            />
+          </div>
         </div>
       </div>
 

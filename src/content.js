@@ -12,6 +12,9 @@ import {
   isValidEmail
 } from './helpers.js';
 
+let shouldStopScraping = false;
+
+
 async function scrapeMapsLeads(workflowId) {
   // Find the scrollable feed container in Google Maps
   const feed = document.querySelector('div[role="feed"]');
@@ -58,7 +61,7 @@ async function scrapeMapsLeads(workflowId) {
   processNewCards();
 
   // Use helper method to scroll (12 retries * 5000ms = 60 seconds)
-  await scrollToBottom(feed, 12, 5000, processNewCards); 
+  await scrollToBottom(feed, 12, 5000, processNewCards, () => shouldStopScraping); 
 
 
   // Get the search title
@@ -187,6 +190,10 @@ async function scrapePlacesLeads(workflowId) {
   let retries = 0;
 
   while (nextBtn && retries < 12) {
+    if (shouldStopScraping) {
+      console.log("Scraping manually stopped in Places.");
+      break;
+    }
     try {
       const nextUrl = nextBtn.href;
       if (!nextUrl) break;
@@ -252,6 +259,7 @@ async function scrapePlacesLeads(workflowId) {
 }
 
 async function scrapeLeads(workflowId) {
+  shouldStopScraping = false;
   if (window.location.href.includes('google.com/search')) {
     return scrapePlacesLeads(workflowId);
   }
@@ -279,6 +287,12 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       sendResponse({ success: false, error: err.message });
     });
     return true; // Keep message channel open for async response
+  }
+  
+  if (request.action === 'stopScrape') {
+    shouldStopScraping = true;
+    sendResponse({ success: true });
+    return true;
   }
 });
 

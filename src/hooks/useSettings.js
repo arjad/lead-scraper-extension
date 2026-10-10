@@ -13,7 +13,8 @@ const DEFAULT_SETTINGS = {
     Website: true,
     Email: true,
     Status: true
-  }
+  },
+  messageTemplate: "hello, is it the owner of {business_name}"
 };
 
 export function useSettings() {

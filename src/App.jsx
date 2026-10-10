@@ -24,6 +24,49 @@ function validatePhone(phone) {
   return digits.length >= 7 ? cleaned : '';
 }
 
+const CopyMessageButton = ({ template, businessName }) => {
+  const [copied, setCopied] = useState(false);
+  const handleCopy = () => {
+    const tpl = template || "hello, is it the owner of {business_name}";
+    const msg = tpl.replace('{business_name}', businessName || 'this business');
+    
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(msg).then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      }).catch((err) => {
+        fallbackCopy(msg);
+      });
+    } else {
+      fallbackCopy(msg);
+    }
+  };
+
+  const fallbackCopy = (text) => {
+    const textArea = document.createElement("textarea");
+    textArea.value = text;
+    document.body.appendChild(textArea);
+    textArea.select();
+    try {
+      document.execCommand('copy');
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error('Fallback copy failed', err);
+    }
+    document.body.removeChild(textArea);
+  };
+  return (
+    <button onClick={handleCopy} className={`p-1.5 rounded transition-colors ${copied ? 'text-green-500 bg-green-500/10' : 'text-primary hover:bg-primary/10'}`} title="Copy Message">
+      {copied ? (
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path></svg>
+      ) : (
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"></path></svg>
+      )}
+    </button>
+  );
+};
+
 function App() {
   const { settings, isLoaded: settingsLoaded } = useSettings()
   const { workflows, addWorkflow, updateWorkflow, deleteWorkflow, addLeadToWorkflow, isLoaded: workflowsLoaded } = useWorkflows()
@@ -42,6 +85,9 @@ function App() {
   const [exportDropdownOpen, setExportDropdownOpen] = useState(false)
   const [showDuplicates, setShowDuplicates] = useState(true)
   const [expandedGroups, setExpandedGroups] = useState({});
+  const [leadFilter, setLeadFilter] = useState('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sortConfig, setSortConfig] = useState({ key: null, direction: 'asc' });
 
   const toggleGroup = (niche) => {
     setExpandedGroups(prev => ({ ...prev, [niche]: !prev[niche] }));
@@ -76,6 +122,8 @@ function App() {
     }
   }, [addLeadToWorkflow]);
 
+  const [showAddWebsitesModal, setShowAddWebsitesModal] = useState(false)
+  const [manualWebsites, setManualWebsites] = useState('')
   const [loading, setLoading] = useState(false)
   const [enriching, setEnriching] = useState(false)
   const [error, setError] = useState(null)
@@ -146,12 +194,105 @@ function App() {
     }
   }
 
+  const handleStopScraping = () => {
+    if (typeof chrome !== 'undefined' && chrome.tabs) {
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs[0]) {
+          chrome.tabs.sendMessage(tabs[0].id, { action: 'stopScrape' });
+        }
+      });
+    }
+    if (activeWorkflowId) {
+      updateWorkflow(activeWorkflowId, { status: 'completed' });
+    }
+    setLoading(false);
+  };
+
+  const handleAddManualWebsites = async () => {
+    if (!manualWebsites.trim()) return;
+    
+    // Parse websites
+    const websitesList = manualWebsites
+      .split(/[\n,]+/)
+      .map(w => w.trim())
+      .filter(w => w && w.includes('.'));
+      
+    if (websitesList.length === 0) {
+      setError("No valid websites found.");
+      return;
+    }
+
+    const newLeads = websitesList.map(website => {
+      let domain = website.replace(/^(?:https?:\/\/)?(?:www\.)?/i, "").split('/')[0];
+      const domainName = domain.split('.')[0];
+      const name = domainName.charAt(0).toUpperCase() + domainName.slice(1);
+      
+      return {
+        email: '',
+        name: name,
+        website: website.startsWith('http') ? website : `https://${website}`,
+        phone: '', 
+        address: ''
+      };
+    });
+
+    const newWf = addWorkflow("Manual Websites List", newLeads, 'enriching');
+    
+    setShowAddWebsitesModal(false);
+    setManualWebsites('');
+    setEnriching(true);
+    setError(null);
+    
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
+      
+      const response = await fetch(`${API_BASE_URL}/process-leads`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ leads: newLeads }),
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeoutId);
+      
+      if (!response.ok) {
+        throw new Error(`Failed to start job. Status: ${response.status}`);
+      }
+      
+      const { job_id } = await response.json();
+      
+      updateWorkflow(newWf.id, { status: 'enriching', job_id: job_id });
+      
+      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+        chrome.storage.local.get(['leadScrapperWorkflows'], (result) => {
+          const wfs = result.leadScrapperWorkflows || [];
+          const updated = wfs.map(w => w.id === newWf.id ? { ...w, status: 'enriching', job_id: job_id } : w);
+          chrome.storage.local.set({ leadScrapperWorkflows: updated });
+        });
+      }
+      
+      setEnriching(false);
+    } catch (err) {
+      const message = err.name === 'AbortError' 
+        ? "Request timed out. The backend server may be down." 
+        : "Scraping request failed: " + err.message;
+      setError(message);
+      updateWorkflow(newWf.id, { status: 'completed' });
+      setEnriching(false);
+    }
+  }
+
   const exportCSV = (filter = 'all') => {
     if (activeWorkflow) {
       let leadsToExport = activeWorkflow.leads;
       if (filter === 'email') leadsToExport = leadsToExport.filter(l => l.email);
       else if (filter === 'phone') leadsToExport = leadsToExport.filter(l => l.phone);
       else if (filter === 'website') leadsToExport = leadsToExport.filter(l => l.website);
+      else if (filter === 'without_email') leadsToExport = leadsToExport.filter(l => !l.email);
+      else if (filter === 'without_phone') leadsToExport = leadsToExport.filter(l => !l.phone);
 
       exportToCSV(leadsToExport, `${activeWorkflow.title.replace(/\s+/g, '_')}_leads_${filter}.csv`, settings.csvHeaders)
     }
@@ -339,27 +480,80 @@ function App() {
 
 
 
+  const handleSort = (key) => {
+    let direction = 'asc';
+    if (sortConfig.key === key && sortConfig.direction === 'asc') {
+      direction = 'desc';
+    } else if (sortConfig.key === key && sortConfig.direction === 'desc') {
+      key = null; // reset sort
+    }
+    setSortConfig({ key, direction });
+  };
+
   const getExpandedLeads = (leads) => {
     if (!leads) return [];
+    
+    let processedLeads = leads.map((l, i) => ({ ...l, originalIndex: l.originalIndex ?? i }));
+    
+    if (leadFilter === 'no_website') {
+      processedLeads = processedLeads.filter(l => !l.website);
+    } else if (leadFilter === 'no_phone') {
+      processedLeads = processedLeads.filter(l => !l.phone);
+    } else if (leadFilter === 'with_phone') {
+      processedLeads = processedLeads.filter(l => l.phone);
+    }
+    
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      processedLeads = processedLeads.filter(l => 
+        (l.name && l.name.toLowerCase().includes(q)) ||
+        (l.phone && l.phone.toLowerCase().includes(q)) ||
+        (l.email && l.email.toLowerCase().includes(q))
+      );
+    }
+    
+    if (sortConfig.key) {
+      processedLeads.sort((a, b) => {
+        let aVal = a[sortConfig.key] || '';
+        let bVal = b[sortConfig.key] || '';
+        if (typeof aVal === 'string') aVal = aVal.toLowerCase();
+        if (typeof bVal === 'string') bVal = bVal.toLowerCase();
+        if (aVal < bVal) return sortConfig.direction === 'asc' ? -1 : 1;
+        if (aVal > bVal) return sortConfig.direction === 'asc' ? 1 : -1;
+        return 0;
+      });
+    }
+
     const expanded = [];
-    leads.forEach((lead, originalIndex) => {
+    processedLeads.forEach((lead) => {
       if (showDuplicates && lead.email && lead.email.includes(',')) {
         const emails = lead.email.split(',').map(e => e.trim()).filter(Boolean);
         emails.forEach((email, i) => {
           expanded.push({
             ...lead,
-            originalIndex: lead.originalIndex ?? originalIndex,
             email: email,
             isDuplicateEmail: i > 0,
             emailIndex: i
           });
         });
       } else {
-        expanded.push({ ...lead, originalIndex: lead.originalIndex ?? originalIndex });
+        expanded.push({ ...lead });
       }
     });
     return expanded;
   };
+
+  const renderSortableHeader = (label, key, className = "") => (
+    <th className={`p-3 font-semibold cursor-pointer select-none hover:bg-surface/80 ${className}`} onClick={() => handleSort(key)}>
+      <div className="flex items-center space-x-1">
+        <span>{label}</span>
+        {sortConfig.key === key && (
+          <span className="text-xs text-primary">{sortConfig.direction === 'asc' ? '↑' : '↓'}</span>
+        )}
+      </div>
+    </th>
+  );
+
 
   return (
     <div className="w-full h-full flex flex-col p-5 bg-background text-textMain relative">
@@ -412,20 +606,29 @@ function App() {
       {/* HOME VIEW */}
       {view === 'home' && (
         <div className="flex flex-col flex-1 overflow-hidden">
-          <button 
-            onClick={handleScrape}
-            disabled={loading || !isValidPage}
-            className={`w-full py-3 px-4 mb-6 transition-all duration-200 rounded-lg font-semibold text-white shadow-md flex items-center justify-center space-x-2 shrink-0 ${(!isValidPage || loading) ? 'bg-gray-500 cursor-not-allowed opacity-50' : 'bg-primary hover:opacity-90 active:scale-95 shadow-primary/20'}`}
-          >
-            {loading ? (
-              <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
-            ) : (
-              <>
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
-                <span>Scrape Current Page</span>
-              </>
-            )}
-          </button>
+          <div className="flex space-x-2 mb-6">
+            <button 
+              onClick={handleScrape}
+              disabled={loading || !isValidPage}
+              className={`flex-1 py-3 px-4 transition-all duration-200 rounded-lg font-semibold text-white shadow-md flex items-center justify-center space-x-2 shrink-0 ${(!isValidPage || loading) ? 'bg-gray-500 cursor-not-allowed opacity-50' : 'bg-primary hover:opacity-90 active:scale-95 shadow-primary/20'}`}
+            >
+              {loading ? (
+                <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+              ) : (
+                <>
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+                  <span>Scrape Current Page</span>
+                </>
+              )}
+            </button>
+            <button 
+              onClick={() => setShowAddWebsitesModal(true)}
+              className="flex-1 py-3 px-4 transition-all duration-200 rounded-lg font-semibold text-white shadow-md flex items-center justify-center space-x-2 shrink-0 bg-blue-600 hover:opacity-90 active:scale-95 shadow-blue-600/20"
+            >
+               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"></path></svg>
+               <span>Add Websites</span>
+            </button>
+          </div>
 
           <div className="flex justify-between items-center mb-3 px-1">
             <h2 className="text-sm font-semibold text-textMuted uppercase tracking-wider">Your Workflows</h2>
@@ -582,78 +785,109 @@ function App() {
       {/* WORKFLOW DETAIL VIEW */}
       {view === 'workflow' && activeWorkflow && (
         <div className="flex flex-col flex-1 overflow-hidden">
-          <div className="mb-4 pb-4 border-b border-surface">
-            <h2 className="text-lg font-bold text-textMain truncate pr-2" title={activeWorkflow.title}>{activeWorkflow.title}</h2>
-            <div className="flex items-center justify-between mt-2">
+          <div className="mb-3 px-2 flex items-center justify-between pb-3 border-b border-surface">
+            {/* LEFT SIDE: Title and Lead Count */}
+            <div className="flex flex-col">
               <div className="flex items-center space-x-2">
-                <span className="text-xs font-medium text-textMuted bg-surface px-2 py-1 rounded">
-                  {activeWorkflow.status === 'scraping' ? 'Scraping in progress...' : (activeWorkflow.status === 'enriching' ? `Scraping websites: ${activeWorkflow.completed_leads || 0} / ${activeWorkflow.total_leads || activeWorkflow.leads.length} done` : `${activeWorkflow.leads.length} leads found`)}
-                </span>
+                <h2 className="text-base font-bold text-textMain" title={activeWorkflow.title}>{activeWorkflow.title}</h2>
                 {activeWorkflow.status === 'scraping' && (
-                  <svg className="animate-spin h-4 w-4 text-primary" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                  <svg className="animate-spin h-3 w-3 text-primary" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
                 )}
               </div>
-              <div className="flex items-center space-x-2">
-              {activeWorkflow.status === 'enriching' && (
-                <button
-                  onClick={handleRefreshStatus}
-                  disabled={enriching}
-                  className="px-6 py-2 bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 rounded-lg font-medium transition-colors border border-blue-600/30 disabled:opacity-50 flex items-center"
-                >
-                  {enriching ? (
-                    <><svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-blue-400" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>Refreshing...</>
-                  ) : "Refresh Results"}
-                </button>
-              )}
-              
-              {!activeWorkflow.enriched && activeWorkflow.status !== 'enriching' && (
-                <button 
-                  onClick={startIndividualScraping}
-                  disabled={enriching || activeWorkflow.status === 'scraping'}
-                  className={`text-xs py-1.5 px-3 rounded-md transition-all flex items-center space-x-1 ${
-                    enriching || activeWorkflow.status === 'scraping'
-                      ? 'bg-surface text-textMuted border border-secondary/20 cursor-not-allowed'
-                      : 'bg-primary/10 text-primary hover:bg-primary/20 border border-primary/20'
-                  }`}
-                >
-                  {enriching ? (
-                    <><svg className="animate-spin h-3 w-3" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg><span>Processing...</span></>
-                  ) : activeWorkflow.enriched ? (
-                    <><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg><span>Retry Failed</span></>
-                  ) : (
-                    <><svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg><span>Start individual scraping</span></>
-                  )}
-                </button>
-              )}
+              <span className="text-[10px] text-textMuted mt-0.5">
+                {activeWorkflow.status === 'scraping' ? 'Scraping in progress...' : (activeWorkflow.status === 'enriching' ? `Scraping websites: ${activeWorkflow.completed_leads || 0} / ${activeWorkflow.total_leads || activeWorkflow.leads.length} done` : `${activeWorkflow.leads.length} leads found`)}
+              </span>
+            </div>
 
-              <div className="relative">
+            {/* RIGHT SIDE: Filters, Search, and Actions */}
+            <div className="flex flex-col items-end space-y-2">
+              {/* ROW 1: Filters & Search */}
+              <div className="flex items-center space-x-3">
+                <label className="flex items-center space-x-1.5 text-xs text-textMuted cursor-pointer hover:text-textMain transition-colors">
+                  <input type="checkbox" checked={showDuplicates} onChange={(e) => setShowDuplicates(e.target.checked)} className="rounded border-secondary/30 text-primary focus:ring-primary/50 cursor-pointer w-3 h-3" />
+                  <span>Show duplicates</span>
+                </label>
+
+                <select
+                  value={leadFilter}
+                  onChange={(e) => setLeadFilter(e.target.value)}
+                  className="text-xs py-1 px-2 bg-surface border border-secondary/30 rounded text-textMain outline-none focus:ring-1 focus:ring-primary/50 cursor-pointer"
+                >
+                  <option value="all">All Leads</option>
+                  <option value="no_website">No Website</option>
+                  <option value="no_phone">No Phone</option>
+                  <option value="with_phone">With Phone</option>
+                </select>
+
+                <div className="relative flex items-center group">
+                  <svg className="w-3.5 h-3.5 absolute left-2 text-textMuted group-focus-within:text-primary transition-colors z-10 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+                  <input
+                    type="text"
+                    placeholder="Search leads..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="text-xs py-1 pl-7 pr-2 bg-surface border border-secondary/30 hover:border-secondary/50 focus:border-secondary/50 rounded outline-none focus:ring-1 focus:ring-primary/50 w-48 transition-colors"
+                  />
+                </div>
+              </div>
+
+              {/* ROW 2: Actions */}
+              <div className="flex items-center space-x-2">
+                {activeWorkflow.status === 'enriching' && (
+                  <button
+                    onClick={handleRefreshStatus}
+                    disabled={enriching}
+                    className="px-3 py-1 bg-blue-600/20 text-blue-400 hover:bg-blue-600/30 rounded text-xs font-medium transition-colors border border-blue-600/30 disabled:opacity-50 flex items-center space-x-1.5"
+                    title="Refresh Results"
+                  >
+                    {enriching ? <svg className="animate-spin h-3.5 w-3.5" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> : <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>}
+                    <span>Refresh</span>
+                  </button>
+                )}
+                
+                {!activeWorkflow.enriched && activeWorkflow.status !== 'enriching' && (
+                  <button 
+                    onClick={startIndividualScraping}
+                    disabled={enriching || activeWorkflow.status === 'scraping'}
+                    className={`px-4 py-1.5 rounded text-xs font-semibold transition-all flex items-center space-x-1.5 ${enriching || activeWorkflow.status === 'scraping' ? 'bg-surface text-textMuted cursor-not-allowed border border-secondary/20' : 'bg-primary text-white hover:bg-primary/90 shadow-sm'}`}
+                  >
+                    {enriching ? <><svg className="animate-spin h-3.5 w-3.5" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> <span>Processing...</span></> : activeWorkflow.enriched ? <><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg> <span>Retry Failed</span></> : <><svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg> <span>Start Individual Scraping</span></>}
+                  </button>
+                )}
+
+                {activeWorkflow.status === 'scraping' && (
+                  <button 
+                    onClick={handleStopScraping}
+                    className="px-3 py-1.5 bg-red-500/10 text-red-500 hover:bg-red-500/20 rounded text-xs font-medium transition-all flex items-center space-x-1.5"
+                  >
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+                    <span>Stop Scraping</span>
+                  </button>
+                )}
+
+                <div className="relative">
                   <button 
                     onClick={() => setExportDropdownOpen(!exportDropdownOpen)}
                     disabled={activeWorkflow.status === 'scraping'}
-                    className={`text-xs py-1.5 px-3 bg-surface border border-secondary/30 rounded-md transition-all flex items-center space-x-1 ${activeWorkflow.status === 'scraping' ? 'opacity-50 cursor-not-allowed' : 'hover:opacity-80'}`}
+                    className={`px-3 py-1.5 bg-surface border border-secondary/30 rounded text-xs font-medium transition-all flex items-center space-x-1.5 ${activeWorkflow.status === 'scraping' ? 'opacity-50 cursor-not-allowed' : 'hover:bg-surface/80 text-textMain'}`}
                   >
-                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                    <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
                     <span>Export CSV</span>
-                    <svg className="w-3 h-3 ml-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
+                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7"></path></svg>
                   </button>
                   {exportDropdownOpen && (
-                    <div className="absolute right-0 mt-1 w-40 bg-surface border border-secondary/30 rounded-md shadow-lg z-50 py-1 flex flex-col">
-                      <button onClick={() => { exportCSV('all'); setExportDropdownOpen(false) }} className="w-full text-left px-4 py-2 text-xs hover:bg-surface/80 text-textMain transition-colors">All Leads</button>
-                      <button onClick={() => { exportCSV('email'); setExportDropdownOpen(false) }} className="w-full text-left px-4 py-2 text-xs hover:bg-surface/80 text-textMain transition-colors">Only with Email</button>
-                      <button onClick={() => { exportCSV('phone'); setExportDropdownOpen(false) }} className="w-full text-left px-4 py-2 text-xs hover:bg-surface/80 text-textMain transition-colors">Only with Phone</button>
-                      <button onClick={() => { exportCSV('website'); setExportDropdownOpen(false) }} className="w-full text-left px-4 py-2 text-xs hover:bg-surface/80 text-textMain transition-colors">Only with Website</button>
+                    <div className="absolute right-0 mt-1 w-32 bg-surface border border-secondary/30 rounded shadow-lg z-50 py-1 flex flex-col">
+                      <button onClick={() => { exportCSV('all'); setExportDropdownOpen(false) }} className="w-full text-left px-3 py-1.5 text-[11px] hover:bg-surface/80 text-textMain transition-colors">All Leads</button>
+                      <button onClick={() => { exportCSV('email'); setExportDropdownOpen(false) }} className="w-full text-left px-3 py-1.5 text-[11px] hover:bg-surface/80 text-textMain transition-colors">Only with Email</button>
+                      <button onClick={() => { exportCSV('phone'); setExportDropdownOpen(false) }} className="w-full text-left px-3 py-1.5 text-[11px] hover:bg-surface/80 text-textMain transition-colors">Only with Phone</button>
+                      <button onClick={() => { exportCSV('website'); setExportDropdownOpen(false) }} className="w-full text-left px-3 py-1.5 text-[11px] hover:bg-surface/80 text-textMain transition-colors">Only with Website</button>
+                      <button onClick={() => { exportCSV('without_email'); setExportDropdownOpen(false) }} className="w-full text-left px-3 py-1.5 text-[11px] hover:bg-surface/80 text-textMain transition-colors">Without Email</button>
+                      <button onClick={() => { exportCSV('without_phone'); setExportDropdownOpen(false) }} className="w-full text-left px-3 py-1.5 text-[11px] hover:bg-surface/80 text-textMain transition-colors">Without Phone</button>
                     </div>
                   )}
                 </div>
               </div>
             </div>
-          </div>
-          
-          <div className="mb-3 px-2 flex items-center">
-            <label className="flex items-center space-x-2 text-sm text-textMuted cursor-pointer hover:text-textMain transition-colors">
-              <input type="checkbox" checked={showDuplicates} onChange={(e) => setShowDuplicates(e.target.checked)} className="rounded border-secondary/30 text-primary focus:ring-primary/50 cursor-pointer" />
-              <span>Show all duplicate emails</span>
-            </label>
           </div>
           
           <div className="flex-1 overflow-auto -mx-5">
@@ -662,19 +896,19 @@ function App() {
                 <tr className="border-b border-surface text-textMuted bg-surface">
                   <th className="p-3 pl-5 font-semibold w-[50px] min-w-[50px] text-center sticky left-0 z-30 bg-surface">✔</th>
                   <th className="p-3 font-semibold w-[40px] min-w-[40px] text-center sticky left-[50px] z-30 bg-surface shadow-[4px_0_6px_-2px_rgba(0,0,0,0.05)]">#</th>
-                  <th className="p-3 font-semibold">Company Name</th>
-                  <th className="p-3 font-semibold">Address</th>
-                  <th className="p-3 font-semibold">Website</th>
-                  <th className="p-3 font-semibold">Phone</th>
+                  {renderSortableHeader('Company Name', 'name')}
+                  {renderSortableHeader('Address', 'address')}
+                  {renderSortableHeader('Website', 'website')}
+                  {renderSortableHeader('Phone', 'phone')}
+                  <th className="p-3 font-semibold text-center cursor-default bg-surface hover:bg-surface/80">Message</th>
                   {(activeWorkflow.enriched || activeWorkflow.status === 'enriching') && (
                     <>
-                      <th className="p-3 font-semibold">Email</th>
-                      <th className="p-3 font-semibold">Facebook</th>
-                      <th className="p-3 font-semibold">Insta DM</th>
-                      <th className="p-3 font-semibold">Instagram Profile</th>
-                      <th className="p-3 font-semibold">Twitter</th>
-                      <th className="p-3 font-semibold">LinkedIn</th>
-                      <th className="p-3 pr-5 font-semibold">Status</th>
+                      {renderSortableHeader('Email', 'email')}
+                      {renderSortableHeader('Facebook', 'facebook')}
+                      {renderSortableHeader('Instagram Profile', 'instagram')}
+                      {renderSortableHeader('Twitter', 'twitter')}
+                      {renderSortableHeader('LinkedIn', 'linkedin')}
+                      {renderSortableHeader('Status', 'status')}
                     </>
                   )}
                 </tr>
@@ -692,11 +926,13 @@ function App() {
                       {lead.website ? <a href={lead.website} target="_blank" rel="noreferrer" className="text-primary hover:underline">{lead.website}</a> : '-'}
                     </td>
                     <td className="p-3 min-w-[60px] max-w-[150px] truncate" title={lead.phone}>{lead.phone ? <a href={getWhatsAppLink(lead.phone)} target="_blank" rel="noreferrer" className="text-primary hover:underline" title="Message on WhatsApp">{lead.phone}</a> : '-'}</td>
+                    <td className="p-3 text-center">
+                      <CopyMessageButton template={settings.messageTemplate} businessName={lead.name} />
+                    </td>
                     {(activeWorkflow.enriched || activeWorkflow.status === 'enriching') && (
                       <>
                         <td className="p-3 min-w-[60px] max-w-[150px] truncate" title={lead.email}>{lead.email ? <a href={`https://mail.google.com/mail/?view=cm&fs=1&to=${lead.email}`} target="_blank" rel="noreferrer" className="text-green-500 hover:underline">{lead.email}</a> : '-'}</td>
                         <td className="p-3 min-w-[60px] max-w-[150px] truncate" title={lead.facebook}>{lead.facebook ? <a href={getFbMessageLink(lead.facebook)} target="_blank" rel="noreferrer" className="text-primary hover:underline" title="Send Message on Facebook">{lead.facebook}</a> : '-'}</td>
-                        <td className="p-3 min-w-[60px] max-w-[150px] truncate" title={lead.instagram}>{lead.instagram ? <a href={getIgMessageLink(lead.instagram)} target="_blank" rel="noreferrer" className="text-primary hover:underline" title="Send Message on Instagram">Message</a> : '-'}</td>
                         <td className="p-3 min-w-[60px] max-w-[150px] truncate" title={lead.instagram}>{lead.instagram ? <a href={lead.instagram} target="_blank" rel="noreferrer" className="text-primary hover:underline">{lead.instagram}</a> : '-'}</td>
                         <td className="p-3 min-w-[60px] max-w-[150px] truncate" title={lead.twitter}>{lead.twitter ? <a href={lead.twitter} target="_blank" rel="noreferrer" className="text-primary hover:underline">{lead.twitter}</a> : '-'}</td>
                         <td className="p-3 min-w-[60px] max-w-[150px] truncate" title={lead.linkedin}>{lead.linkedin ? <a href={lead.linkedin} target="_blank" rel="noreferrer" className="text-primary hover:underline">{lead.linkedin}</a> : '-'}</td>
@@ -714,6 +950,37 @@ function App() {
         </div>
       )}
 
+      {showAddWebsitesModal && (
+        <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+          <div className="bg-surface border border-secondary/20 rounded-xl shadow-xl w-full max-w-md p-5 flex flex-col">
+            <h3 className="text-lg font-bold text-textMain mb-2">Add Websites List</h3>
+            <p className="text-xs text-textMuted mb-4">Paste a list of websites (comma-separated or one per line). Company names will be automatically extracted from the domains.</p>
+            
+            <textarea 
+              value={manualWebsites}
+              onChange={(e) => setManualWebsites(e.target.value)}
+              placeholder="e.g. acme.com, https://example.com"
+              className="w-full h-32 bg-background border border-secondary/30 rounded-lg p-3 text-sm text-textMain focus:outline-none focus:ring-2 focus:ring-primary/50 mb-4 resize-none"
+            ></textarea>
+            
+            <div className="flex justify-end space-x-2 mt-auto">
+              <button 
+                onClick={() => { setShowAddWebsitesModal(false); setManualWebsites(''); }}
+                className="px-4 py-2 rounded-lg text-sm font-medium text-textMuted hover:bg-surface/80 hover:text-textMain transition-colors"
+              >
+                Cancel
+              </button>
+              <button 
+                onClick={handleAddManualWebsites}
+                disabled={!manualWebsites.trim()}
+                className="px-4 py-2 rounded-lg text-sm font-medium text-white bg-primary hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Start Scraping
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

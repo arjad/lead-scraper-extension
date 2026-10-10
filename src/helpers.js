@@ -2,11 +2,15 @@ export function delay(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-export async function scrollToBottom(feed, retriesCount = 12, delayMs = 5000, onProgress = null) {
+export async function scrollToBottom(feed, retriesCount = 12, delayMs = 5000, onProgress = null, shouldStopFn = null) {
   let lastRecordCount = 0;
   let retries = 0;
   
   while (retries < retriesCount) {
+    if (shouldStopFn && shouldStopFn()) {
+      console.log("Scrolling manually stopped.");
+      break;
+    }
     if (feed === window || !feed) {
       window.scrollTo(0, document.body.scrollHeight);
     } else {
